@@ -1,4 +1,5 @@
 import time
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -6,47 +7,62 @@ from PIL import Image
 
 from ..stream_diffusion import StreamDiffusion
 
+SD_SIDE_LENGTH = 512
+
 
 def main():
-    prev_time = time.time()
-
-    stream = StreamDiffusion(prompt="1man, expressive, pop art style").stream
+    stream = StreamDiffusion(prompt="cartoon, deepfake").stream
 
     cap = cv2.VideoCapture(0)
 
-    img_dst = Image.new("RGB", (1024, 512))
+    img_dst = Image.new("RGB", (SD_SIDE_LENGTH * 2, SD_SIDE_LENGTH))
 
     while True:
-        ret, frame = cap.read()
+        try:
+            _, frame = cap.read()
 
-        width, height = frame.shape[1], frame.shape[0]
-        left = (width - 1024) // 2
-        top = (height - 1024) // 2
-        right = (width + 1024) // 2
-        bottom = (height + 1024) // 2
+            init_img = crop_center(Image.fromarray(frame), SD_SIDE_LENGTH * 2, SD_SIDE_LENGTH * 2).resize(
+                (SD_SIDE_LENGTH, SD_SIDE_LENGTH), Image.NEAREST
+            )
 
-        img_init = Image.fromarray(frame).crop((left, top, right, bottom)).resize((512, 512), Image.NEAREST)
+            image_tensor = stream.preprocess_image(init_img)
 
-        image_tensor = stream.preprocess_image(img_init)
+            output_image, fps = timeit(stream)(image=image_tensor)
 
-        output_image = stream(image=image_tensor)
+            if isinstance(output_image, Image.Image):
+                img_dst.paste(init_img, (0, 0))
+                img_dst.paste(output_image, (SD_SIDE_LENGTH, 0))
 
-        if isinstance(output_image, Image.Image):
-            img_dst.paste(img_init, (0, 0))
-            img_dst.paste(output_image, (512, 0))
+                cv2.imshow("{} fps".format(fps), np.array(img_dst))
+                cv2.waitKey(1)
 
-            curr_time = time.time()
-            fps = 1 / (curr_time - prev_time)
-            prev_time = curr_time
-
-            fps_str = "{} fps".format(str(fps))
-
-            cv2.imshow(fps_str, np.array(img_dst))
-            if cv2.waitKey(10) & 0xFF == ord("q"):
-                break
+        except KeyboardInterrupt:
+            break
 
     cap.release()
     cv2.destroyAllWindows()
+
+
+def timeit(func: Callable[..., Any]):
+    def wrapper(*args, **kwargs) -> tuple[Image.Image, str]:
+        start = time.time()
+        result = func(*args, **kwargs)
+        elapsed_time = time.time() - start
+        return result, f"{1 / elapsed_time}"
+
+    return wrapper
+
+
+def crop_center(pil_img: Image.Image, crop_width: int, crop_height: int):
+    img_width, img_height = pil_img.size
+    return pil_img.crop(
+        (
+            (img_width - crop_width) // 2,
+            (img_height - crop_height) // 2,
+            (img_width + crop_width) // 2,
+            (img_height + crop_height) // 2,
+        )
+    )
 
 
 if __name__ == "__main__":
